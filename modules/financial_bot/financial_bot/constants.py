@@ -11,7 +11,7 @@ VECTOR_DB_SEARCH_TOPK = 1
 # == LLM Model ==
 LLM_MODEL_ID = "tiiuae/falcon-7b-instruct"
 LLM_QLORA_CHECKPOINT = "iusztinpaul/fin-falcon-7b-lora:1.0.5"
-
+PROMPT_ENGINEERING_LLM_ID = "gpt-4o-mini"
 
 LLM_INFERNECE_MAX_NEW_TOKENS = 500
 LLM_INFERENCE_TEMPERATURE = 1.0

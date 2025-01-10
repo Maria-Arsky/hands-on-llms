@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 
 import comet_ml
 from datasets import Dataset
@@ -157,6 +157,43 @@ class TrainingAPI:
             max_seq_length=config.model["max_seq_length"],
             model_cache_dir=model_cache_dir,
         )
+    
+    def get_multishot(self, training_data: Dict) -> Dict:
+        """
+        """
+        data = training_data["payload"]
+        
+        multishot = {}
+        for i in range(3):
+            example_str = f">>QUESTION<< " + data[i]["question"]
+            example_str += f"\n>>DOMAIN<< " + data[i]["news_context"]
+            example_str += f"\n>>ANSWER<< " + data[i]["answer"]
+            multishot[f"Example {i+1}"] = example_str
+        with open("multishot.txt", "w") as f:
+            f.write(" \n".join(multishot.values()))
+            
+        return multishot
+        
+    def optimize_training_data(self, training_dataset: Dataset) -> Dataset:
+        """
+        """
+        # We take the first 3 samples from the training data and use them as multishot
+        training_data = training_dataset.to_dict()
+        multishot = self.get_multishot(training_data)
+        addition = "\n>>EXAMAPLES<< " + " \n".join(multishot.values()) + "<|endoftext|>"
+        
+        new_training_data = {"payload": training_data["payload"][3:], "prompt": training_data["prompt"][3:]}
+        # Update the training dataset
+        for i in range(len(new_training_data["payload"])):
+            prompt = new_training_data["prompt"][i]
+            if "<|endoftext|>" in prompt:
+                prompt = prompt.replace("<|endoftext|>", addition)
+            else:
+                prompt += addition
+            new_training_data["prompt"][i] = prompt
+        training_dataset = Dataset.from_dict(new_training_data)
+        
+        return training_dataset
 
     def load_data(self) -> Tuple[Dataset, Dataset]:
         """
@@ -178,6 +215,8 @@ class TrainingAPI:
             template=self._template_name,
             scope=constants.Scope.TRAINING,
         ).to_huggingface()
+
+        training_dataset = self.optimize_training_data(training_dataset)
 
         logger.info(f"Training dataset size: {len(training_dataset)}")
         logger.info(f"Validation dataset size: {len(validation_dataset)}")

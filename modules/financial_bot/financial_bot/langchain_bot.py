@@ -9,6 +9,7 @@ from langchain.memory import ConversationBufferWindowMemory
 from financial_bot import constants
 from financial_bot.chains import (
     ContextExtractorChain,
+    OptimizePromptChain,
     FinancialBotQAChain,
     StatelessMemorySequentialChain,
 )
@@ -99,7 +100,10 @@ class FinancialBot:
         This embedded question is then used to retrieve relevant context from the VectorDB.
         The output of this chain will be a dict payload.
 
-        2. LLM Generator: Once the context is extracted,
+        2. Prompt Optimization: Add reasoning to the user prompt by using chainOfThoughts,
+        based on users input and retrieved context.
+
+        3. LLM Generator: Once the context is extracted,
         this stage uses it to format a full prompt for the LLM and
         then feed it to the model to get a response that is relevant to the user's question.
 
@@ -111,12 +115,13 @@ class FinancialBot:
         Notes
         -----
         The actual processing flow within the chain can be visualized as:
-        [about: str][question: str] > ContextChain >
-        [about: str][question:str] + [context: str] > FinancialChain >
+        [about: str][question: str] > ContextChain
+        [about: str][question:str] + [context: str] > PromptChain >
+        [about: str][question:str] + [context: str] + [reasoning: str] > FinancialChain > 
         [answer: str]
         """
 
-        logger.info("Building 1/3 - ContextExtractorChain")
+        logger.info("Building 1/4 - ContextExtractorChain")
         context_retrieval_chain = ContextExtractorChain(
             embedding_model=self._embd_model,
             vector_store=self._qdrant_client,
@@ -124,7 +129,10 @@ class FinancialBot:
             top_k=self._vector_db_search_topk,
         )
 
-        logger.info("Building 2/3 - FinancialBotQAChain")
+        logger.info("Building 2/4 - OptimizePromptChain")
+        optimize_prompt_chain = OptimizePromptChain()
+
+        logger.info("Building 3/4 - FinancialBotQAChain")
         if self._debug:
             callabacks = []
         else:
@@ -149,7 +157,7 @@ class FinancialBot:
             callbacks=callabacks,
         )
 
-        logger.info("Building 3/3 - Connecting chains into SequentialChain")
+        logger.info("Building 4/4 - Connecting chains into SequentialChain")
         seq_chain = StatelessMemorySequentialChain(
             history_input_key="to_load_history",
             memory=ConversationBufferWindowMemory(
@@ -158,7 +166,7 @@ class FinancialBot:
                 output_key="answer",
                 k=3,
             ),
-            chains=[context_retrieval_chain, llm_generator_chain],
+            chains=[context_retrieval_chain, optimize_prompt_chain, llm_generator_chain],
             input_variables=["about_me", "question", "to_load_history"],
             output_variables=["answer"],
             verbose=True,
@@ -168,8 +176,9 @@ class FinancialBot:
         logger.info("Workflow:")
         logger.info(
             """
-            [about: str][question: str] > ContextChain > 
-            [about: str][question:str] + [context: str] > FinancialChain > 
+            [about: str][question: str] > ContextChain
+            [about: str][question:str] + [context: str] > PromptChain >
+            [about: str][question:str] + [context: str] + [reasoning: str] > FinancialChain > 
             [answer: str]
             """
         )

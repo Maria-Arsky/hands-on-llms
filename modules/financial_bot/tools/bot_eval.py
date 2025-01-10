@@ -1,8 +1,7 @@
 import logging
 import json
-
+import statistics
 import fire
-
 
 from datasets import Dataset
 
@@ -13,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def evaluate_w_ragas(query: str, context: list[str], output: str, ground_truth: str, metrics: list) -> dict:
     """
-    Evaluate the RAG (query,context,response) using RAGAS
+    Evaluate the RAG (query, context, response) using RAGAS
     """
     from ragas import evaluate
     data_sample = {
@@ -45,38 +44,44 @@ def run_local(
     """
 
     bot = load_bot(model_cache_dir=None)
-    # Import ragas only after loading the environment variables inside load_bot()
-    from ragas.metrics import (
-        answer_correctness,
-        answer_similarity,
-        #context_entity_recall,
-        context_recall,
-        #context_relevancy,
-        #context_utilization,
-        faithfulness
-    )
-    from ragas.metrics.context_precision import context_relevancy
-    metrics = [
-        #context_utilization,
-        context_relevancy,
-        context_recall,
-        answer_similarity,
-        #context_entity_recall,
-        #answer_correctness,
-        faithfulness
-    ]
+    from ragas.metrics import context_precision, context_recall, answer_similarity, faithfulness
+    metrics = [context_precision, context_recall, answer_similarity, faithfulness]
+    results = {"context_precision": [], "context_recall": [], "answer_similarity": [], "faithfulness": []}
 
     with open(testset_path, "r") as f:
         data = json.load(f)
-        for elem in data:
+        for idx, elem in enumerate(data):
             input_payload = {
                 "about_me": elem["about_me"],
                 "question": elem["question"],
                 "to_load_history": [],
             }
-            output_context = bot.finbot_chain.chains[0].run(input_payload)
+            output_context = bot.finbot_chain.chains[0].run(input_payload).split('\n')
+            input_payload['context'] = output_context
+            output_reasoning = bot.finbot_chain.chains[1].run(**input_payload).split('\n')
+            del input_payload['context']
             response = bot.answer(**input_payload)
-            logger.info("Score=%s", evaluate_w_ragas(query=elem["question"], context=output_context.split('\n'), output=response, ground_truth=elem["response"], metrics=metrics))
+            logger.info("ABOUT = %s", elem["about_me"])
+            logger.info("QUESTION = %s", elem["question"])
+            logger.info("REASONING = %s", output_reasoning)
+            logger.info("CONTEXT = %s", output_context)
+            logger.info("REF_RESPONSE = %s", elem["response"])
+            logger.info("RESPONSE = %s", response)
+            score = evaluate_w_ragas(query=elem["question"], context=output_context, output=response, ground_truth=elem["response"], metrics=metrics)
+            logger.info("SCORE=%s", score)
+            
+            for metric in results.keys():
+                results[metric].append(score[metric])
+        
+    avg_str, med_str = "", ""
+    for metric in results.keys():
+        avg = statistics.mean(results[metric])
+        avg_str += f"{metric}: {avg}, "
+        med = statistics.median(results[metric])
+        med_str += f"{metric}: {med}, "
+        
+    logger.info(f"AVERAGE_SCORE = {avg_str}")
+    logger.info(f"MEDIAN_SCORE = {med_str}")
 
     return response
 

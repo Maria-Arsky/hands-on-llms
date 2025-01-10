@@ -12,8 +12,8 @@ from tqdm import tqdm
 from src.paths import DATA_DIR
 from src.logger import get_console_logger
 
-NEWS_FILE = DATA_DIR / 'news_2023-01-01_2023-01-05.json'
-QDRANT_COLLECTION_NAME = 'alpaca_news'
+NEWS_FILE = DATA_DIR / 'news_2024-11-01_2024-12-20.json'
+QDRANT_COLLECTION_NAME = 'alpaca_financial_news'
 QDRANT_VECTOR_SIZE = 384
 
 logger = get_console_logger()

@@ -1,5 +1,8 @@
+import logging
 import time
 from typing import Any, Dict, List, Optional
+import dspy
+import re
 
 import qdrant_client
 from langchain import chains
@@ -16,6 +19,7 @@ from unstructured.cleaners.core import (
 
 from financial_bot.embeddings import EmbeddingModelSingleton
 from financial_bot.template import PromptTemplate
+from financial_bot import constants
 
 
 class StatelessMemorySequentialChain(chains.SequentialChain):
@@ -112,7 +116,7 @@ class ContextExtractorChain(Chain):
         _, quest_key = self.input_keys
         question_str = inputs[quest_key]
 
-        cleaned_question = self.clean(question_str)
+        cleaned_question = clean_text(question_str)
         # TODO: Instead of cutting the question at 'max_input_length', chunk the question in 'max_input_length' chunks,
         # pass them through the model and average the embeddings.
         cleaned_question = cleaned_question[: self.embedding_model.max_input_length]
@@ -130,29 +134,42 @@ class ContextExtractorChain(Chain):
         for match in matches:
             context += match.payload["summary"] + "\n"
 
-        return {
-            "context": context,
-        }
+        context = clean_text(context)
+        context = remove_repetitive_patterns(context)
+        return {"context": context}
+    
 
-    def clean(self, question: str) -> str:
-        """
-        Clean the input question by removing unwanted characters.
-
-        Parameters:
-        -----------
-        question : str
-            The input question to clean.
-
-        Returns:
-        --------
-        str
-            The cleaned question.
-        """
-        question = clean(question)
-        question = replace_unicode_quotes(question)
-        question = clean_non_ascii_chars(question)
-
-        return question
+class OptimizePromptChain(Chain):
+    """This custom chain optimizes the the user prompt by adding to it reasoning"""
+    
+    @property
+    def input_keys(self) -> List[str]:
+        return ["context"]
+    
+    @property
+    def output_keys(self) -> List[str]:
+        return ["reasoning"]
+    
+    def _call(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        
+        question_str = inputs["question"]
+        about_str = inputs["about_me"]
+        context_str = inputs["context"]
+        gpt_4o_mini = dspy.OpenAI(
+            model=constants.PROMPT_ENGINEERING_LLM_ID,
+            max_tokens=constants.LLM_INFERNECE_MAX_NEW_TOKENS,
+        )
+        dspy.configure(lm=gpt_4o_mini)
+        
+        classify = dspy.ChainOfThought("context, question -> response")
+        prompt = f"{about_str} {question_str}"
+        response = classify(context=context_str, question=prompt)
+        
+        reasoning = " ".join(response._completions.rationale)
+        reasoning = clean_text(reasoning)
+        reasoning = remove_repetitive_patterns(reasoning)
+        
+        return {"reasoning": reasoning}
 
 
 class FinancialBotQAChain(Chain):
@@ -165,7 +182,7 @@ class FinancialBotQAChain(Chain):
     def input_keys(self) -> List[str]:
         """Returns a list of input keys for the chain"""
 
-        return ["context"]
+        return ["reasoning"]
 
     @property
     def output_keys(self) -> List[str]:
@@ -183,7 +200,7 @@ class FinancialBotQAChain(Chain):
         inputs = self.clean(inputs)
         prompt = self.template.format_infer(
             {
-                "user_context": inputs["about_me"],
+                "user_context": inputs["about_me"] + inputs["reasoning"],
                 "news_context": inputs["context"],
                 "chat_history": inputs["chat_history"],
                 "question": inputs["question"],
@@ -224,3 +241,27 @@ class FinancialBotQAChain(Chain):
             inputs[key] = cleaned_input
 
         return inputs
+    
+
+def clean_text(text: str) -> str:
+        """
+        Clean the input text by removing unwanted characters.
+        Parameters:
+        -----------
+        text : str
+            The input text to clean.
+        Returns:
+        --------
+        str
+            The cleaned text.
+        """
+        text = clean(text)
+        text = replace_unicode_quotes(text)
+        text = clean_non_ascii_chars(text)
+        text = group_broken_paragraphs(text)
+        return text
+    
+def remove_repetitive_patterns(text: str) -> str:
+    # Replace repeated words (e.g., "issue issue issue") with a single instance
+    text = re.sub(r'\b(\w+)( \1\b)+', r'\1', text)
+    return text.strip()
